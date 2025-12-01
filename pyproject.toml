@@ -6,7 +6,6 @@ authors = [
   { name = "Minh Bui", email = "noreply@example.com" }
 ]
 license = { text = "Apache-2.0" }
-readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "fastmcp==2.11.3",
