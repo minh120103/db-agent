@@ -503,7 +503,7 @@ db_agent = DatabaseAgent()
 @mcp.tool(description="Check DB query response time for slow query detection")
 async def check_query_response_time(
     input: str = Field(..., description="user input to check"),
-) -> dict[str, Any]:
+):
     """
     Check database query response time and detect slow queries.
     
@@ -516,7 +516,7 @@ async def check_query_response_time(
 @mcp.tool(description="Check for database deadlocks")
 async def check_deadlock(
     input: str = Field(..., description="user input (for context)"),
-) -> dict[str, Any]:
+):
     """
     Check for database deadlocks.
     
@@ -529,7 +529,7 @@ async def check_deadlock(
 @mcp.tool(description="Check database file size and warn if exceeds 90% threshold")
 async def check_file_size(
     input: str = Field(..., description="user input (for context)"),
-) -> dict[str, Any]:
+):
     """
     Check database file size and warn if it exceeds 90% threshold.
     
@@ -542,7 +542,7 @@ async def check_file_size(
 @mcp.tool(description="Check for abnormal data based on operator-defined rules")
 async def check_abnormal_data(
     input: str = Field(..., description="user input to get data to check"),
-) -> dict[str, Any]:
+):
     """
     Check interface data for abnormalities.
     
@@ -555,7 +555,7 @@ async def check_abnormal_data(
 @mcp.tool(description="Check batch data for abnormalities")
 async def check_batch_data(
     input: str = Field(..., description="user input to get batch data"),
-) -> dict[str, Any]:
+):
     """
     Check batch data for abnormalities.
     
