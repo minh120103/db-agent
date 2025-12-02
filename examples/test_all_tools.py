@@ -10,13 +10,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 from db_agent.server import DatabaseAgent
 
 
-def test_db_agent(user_query: str, db_config: dict):
+def test_db_agent(user_query: str):
     """
-    Test all 5 DB Agent tools with user query and database config.
+    Test all 5 DB Agent tools with user query.
     
     Args:
         user_query: SQL query from user
-        db_config: Database configuration {engine, host, port, database, etc}
     
     Returns:
         dict: Results from all 5 tools
@@ -25,7 +24,6 @@ def test_db_agent(user_query: str, db_config: dict):
     print("DB AGENT - TESTING WITH USER INPUTS")
     print("=" * 70)
     print(f"\nUser Query: {user_query}")
-    print(f"DB Config: {db_config}")
     
     # Initialize agent
     agent = DatabaseAgent()
@@ -38,7 +36,7 @@ def test_db_agent(user_query: str, db_config: dict):
     print("TOOL 1: CHECK QUERY RESPONSE TIME")
     print("=" * 70)
     
-    result = agent.check_query_response_time(user_query, db_config)
+    result = agent.check_query_response_time(user_query)
     
     print(f"✓ Success: {result['success']}")
     print(f"✓ Query: {result['query'][:50]}...")
@@ -54,11 +52,10 @@ def test_db_agent(user_query: str, db_config: dict):
     print("TOOL 2: CHECK DEADLOCK")
     print("=" * 70)
     
-    result = agent.check_deadlock(user_query, db_config)
+    result = agent.check_deadlock(user_query)
     
     print(f"✓ Success: {result['success']}")
     print(f"✓ Query: {result['query'][:50]}...")
-    print(f"✓ Engine: {result['engine']}")
     print(f"✓ Deadlocks detected: {result['deadlocks_detected']}")
     print(f"✓ Status: {result['status']}")
     results['deadlock'] = result
@@ -70,12 +67,10 @@ def test_db_agent(user_query: str, db_config: dict):
     print("TOOL 3: CHECK FILE SIZE")
     print("=" * 70)
     
-    result = agent.check_file_size(user_query, db_config)
+    result = agent.check_file_size(user_query)
     
     print(f"✓ Success: {result['success']}")
     print(f"✓ Query: {result['query'][:50]}...")
-    print(f"✓ Engine: {result['engine']}")
-    print(f"✓ Database: {result['database']}")
     print(f"✓ Size: {result['size_mb']} MB")
     print(f"✓ Usage: {result['usage_percent']}%")
     print(f"✓ Status: {result['status']}")
@@ -88,11 +83,10 @@ def test_db_agent(user_query: str, db_config: dict):
     print("TOOL 4: CHECK ABNORMAL DATA")
     print("=" * 70)
     
-    result = agent.check_abnormal_data(user_query, db_config)
+    result = agent.check_abnormal_data(user_query)
     
     print(f"✓ Success: {result['success']}")
     print(f"✓ Query: {result['query'][:50]}...")
-    print(f"✓ Engine: {result['engine']}")
     print(f"✓ Total rows: {result['total_rows']}")
     print(f"✓ Abnormal count: {result['abnormal_count']}")
     print(f"✓ Has abnormal data: {result['has_abnormal_data']}")
@@ -106,11 +100,10 @@ def test_db_agent(user_query: str, db_config: dict):
     print("TOOL 5: CHECK BATCH DATA")
     print("=" * 70)
     
-    result = agent.check_batch_data(user_query, db_config)
+    result = agent.check_batch_data(user_query)
     
     print(f"✓ Success: {result['success']}")
     print(f"✓ Query: {result['query'][:50]}...")
-    print(f"✓ Engine: {result['engine']}")
     print(f"✓ Total rows: {result['total_rows']}")
     print(f"✓ Abnormal count: {result['abnormal_count']}")
     print(f"✓ Has abnormal data: {result['has_abnormal_data']}")
@@ -125,7 +118,6 @@ def test_db_agent(user_query: str, db_config: dict):
     print("=" * 70)
     print("\n✓ All 5 tools executed successfully")
     print(f"✓ Query tested: {user_query[:50]}...")
-    print(f"✓ Database: {db_config.get('engine', 'N/A')}")
     print("\nResults:")
     print(f"  1. Query Response Time: {results['query_response_time']['status']}")
     print(f"  2. Deadlock Check: {results['deadlock']['status']}")
@@ -139,20 +131,11 @@ def test_db_agent(user_query: str, db_config: dict):
 
 def main():
     """Example usage with user inputs."""
-    # INPUT 1: User Query
-    user_query = "SELECT * FROM orders WHERE status = 'active' AND amount > 100"
-    
-    # INPUT 2: Database Config
-    db_config = {
-        "engine": "postgresql",
-        "host": "localhost",
-        "port": 5432,
-        "database": "mydb",
-        "user": "admin"
-    }
+    # INPUT: User Query
+    user_query = "check for deadlock"
     
     # Run all 5 tests
-    results = test_db_agent(user_query, db_config)
+    results = test_db_agent(user_query)
     
     # Return results
     return results
