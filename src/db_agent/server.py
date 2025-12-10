@@ -13,27 +13,12 @@ Provides tools for querying, schema inspection, data manipulation, and analytics
 
 import logging
 import sys
-import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
+import random
 
 from fastmcp import FastMCP
 from pydantic import Field
-from sqlalchemy.orm import Session
-from sqlalchemy import func, desc
-
-from db_agent.db_models import (
-    SessionLocal,
-    init_db,
-    SlowQuery,
-    DeadlockSession,
-    DeadlockLog,
-    DatabaseFile,
-    AbnormalData,
-    BatchProcessing,
-    Order,
-    Product,
-)
 
 # Configure logging to stderr to avoid MCP protocol interference
 logging.basicConfig(
@@ -47,22 +32,176 @@ logger = logging.getLogger(__name__)
 mcp = FastMCP(name="db-agent", version="1.0.0")
 
 
+# Mock data pools for realistic responses
+MOCK_DEADLOCK_DETAILS = [
+    {
+        "session_id": "SID-1234",
+        "transaction_id": "TXN-5678",
+        "query": "UPDATE orders SET status='shipped' WHERE order_id=12345",
+        "locked_resource": "TABLE:orders:ROW:12345",
+        "wait_time_ms": 1250,
+        "blocking_session": "SID-5678"
+    },
+    {
+        "session_id": "SID-5678",
+        "transaction_id": "TXN-9012",
+        "query": "UPDATE inventory SET quantity=quantity-1 WHERE product_id=67890",
+        "locked_resource": "TABLE:inventory:ROW:67890",
+        "wait_time_ms": 980,
+        "blocking_session": "SID-1234"
+    },
+    {
+        "session_id": "SID-3456",
+        "transaction_id": "TXN-7890",
+        "query": "SELECT * FROM customers WHERE customer_id=456 FOR UPDATE",
+        "locked_resource": "TABLE:customers:ROW:456",
+        "wait_time_ms": 2100,
+        "blocking_session": "SID-7890"
+    }
+]
+
+MOCK_DEADLOCK_LOGS = [
+    {
+        "timestamp": (datetime.now() - timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S"),
+        "deadlock_id": "DL-2024-001",
+        "affected_queries": [
+            "UPDATE orders SET status='processing' WHERE order_id=98765",
+            "DELETE FROM order_items WHERE order_id=98765"
+        ],
+        "victim_session": "SID-4321",
+        "resolution": "Transaction rolled back"
+    },
+    {
+        "timestamp": (datetime.now() - timedelta(hours=5)).strftime("%Y-%m-%d %H:%M:%S"),
+        "deadlock_id": "DL-2024-002",
+        "affected_queries": [
+            "UPDATE products SET stock=stock-5 WHERE product_id=111",
+            "INSERT INTO order_products (order_id, product_id) VALUES (222, 111)"
+        ],
+        "victim_session": "SID-8765",
+        "resolution": "Transaction rolled back"
+    }
+]
+
+MOCK_PREVENTIVE_ACTIONS = [
+    {
+        "issue": "Circular wait on orders and inventory tables",
+        "root_cause": "Transactions acquiring locks in different order",
+        "recommendations": [
+            "Implement consistent lock ordering across all transactions",
+            "Always acquire locks on orders table before inventory table",
+            "Use NOWAIT or timeout hints to fail fast instead of waiting",
+            "Consider using optimistic locking for read-modify-write patterns"
+        ],
+        "code_example": """
+-- Good practice: Consistent lock order
+BEGIN TRANSACTION;
+  UPDATE orders SET ... WHERE order_id = @id;  -- Always lock orders first
+  UPDATE inventory SET ... WHERE product_id = @pid;  -- Then inventory
+COMMIT;
+"""
+    },
+    {
+        "issue": "Long-running transactions holding locks",
+        "root_cause": "Transactions keeping resources locked for extended periods",
+        "recommendations": [
+            "Break large transactions into smaller batches",
+            "Minimize time between acquiring locks and committing",
+            "Use READ COMMITTED isolation level when possible",
+            "Implement retry logic with exponential backoff"
+        ],
+        "code_example": """
+-- Process in smaller batches
+DECLARE @BatchSize INT = 100;
+WHILE EXISTS (SELECT 1 FROM orders WHERE status='pending')
+BEGIN
+  BEGIN TRANSACTION;
+    UPDATE TOP (@BatchSize) orders SET status='processing' WHERE status='pending';
+  COMMIT;
+END;
+"""
+    }
+]
+
+MOCK_SLOW_QUERIES = [
+    {
+        "query": "SELECT * FROM orders o JOIN customers c ON o.customer_id=c.id WHERE o.status='active'",
+        "execution_time_ms": 2450,
+        "recommendations": [
+            "Add index on orders.status column",
+            "Consider adding covering index on (customer_id, status)",
+            "Review JOIN strategy - might need to optimize customer table"
+        ]
+    },
+    {
+        "query": "UPDATE products SET last_checked=NOW() WHERE category='electronics'",
+        "execution_time_ms": 1850,
+        "recommendations": [
+            "Add index on products.category column",
+            "Consider batching updates instead of full table scan",
+            "Use WHERE clause with indexed columns"
+        ]
+    }
+]
+
+MOCK_FILE_SIZE_DATA = [
+    {"database": "prod_db", "size_mb": 1024.5, "growth_rate_mb_per_day": 15.2, "estimated_full_days": 45},
+    {"database": "staging_db", "size_mb": 512.3, "growth_rate_mb_per_day": 8.5, "estimated_full_days": 90},
+    {"database": "dev_db", "size_mb": 256.8, "growth_rate_mb_per_day": 3.1, "estimated_full_days": 180}
+]
+
+MOCK_ABNORMAL_DATA_PATTERNS = [
+    {
+        "table": "orders",
+        "anomaly": "Negative order amounts detected",
+        "affected_rows": [
+            {"order_id": 12345, "amount": -150.00, "customer_id": 789},
+            {"order_id": 12389, "amount": -75.50, "customer_id": 234}
+        ],
+        "severity": "HIGH"
+    },
+    {
+        "table": "inventory",
+        "anomaly": "Stock count exceeds maximum threshold",
+        "affected_rows": [
+            {"product_id": 555, "current_stock": 999999, "max_threshold": 10000},
+            {"product_id": 666, "current_stock": 888888, "max_threshold": 5000}
+        ],
+        "severity": "MEDIUM"
+    }
+]
+
+MOCK_BATCH_DATA_ISSUES = [
+    {
+        "batch_id": "BATCH-2024-001",
+        "records_processed": 10000,
+        "failed_records": 45,
+        "failure_reasons": {
+            "duplicate_key": 30,
+            "validation_error": 10,
+            "timeout": 5
+        },
+        "timestamp": (datetime.now() - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+    },
+    {
+        "batch_id": "BATCH-2024-002",
+        "records_processed": 5000,
+        "failed_records": 12,
+        "failure_reasons": {
+            "foreign_key_violation": 8,
+            "data_type_mismatch": 4
+        },
+        "timestamp": (datetime.now() - timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
+    }
+]
+
+
 class DatabaseAgent:
-    """Database operations agent with PostgreSQL support."""
+    """Database operations agent with support for multiple engines."""
 
     def __init__(self):
         """Initialize the database agent."""
-        logger.info("Database Agent initialized with PostgreSQL connection.")
-        # Initialize database tables
-        try:
-            init_db()
-            logger.info("Database tables initialized successfully.")
-        except Exception as e:
-            logger.error(f"Failed to initialize database: {e}")
-
-    def get_db_session(self) -> Session:
-        """Get a database session."""
-        return SessionLocal()
+        logger.info("Database Agent initialized for monitoring tools.")
 
     def check_query_response_time(self, input: str) -> dict[str, Any]:
         """
@@ -74,63 +213,40 @@ class DatabaseAgent:
         Returns:
             Query response time and slow query status
         """
-        db = self.get_db_session()
         try:
+            # Analyze input to determine if it's a slow query scenario
             input_lower = input.lower()
             
-            # Query slow queries from database
-            if any(keyword in input_lower for keyword in ['slow', 'performance', 'optimize', 'all', 'list']):
-                # Get all slow queries
-                slow_queries = db.query(SlowQuery).order_by(desc(SlowQuery.execution_time_ms)).limit(10).all()
-                
-                if slow_queries:
-                    queries_data = []
-                    for sq in slow_queries:
-                        queries_data.append({
-                            "id": sq.id,
-                            "query": sq.query_text,
-                            "execution_time_ms": sq.execution_time_ms,
-                            "table_name": sq.table_name,
-                            "operation_type": sq.operation_type,
-                            "detected_at": sq.detected_at.strftime("%Y-%m-%d %H:%M:%S"),
-                            "status": sq.status,
-                            "recommendations": json.loads(sq.recommendations) if sq.recommendations else []
-                        })
-                    
-                    return {
-                        "success": True,
-                        "input": input,
-                        "slow_queries_found": len(queries_data),
-                        "status": "SLOW QUERIES DETECTED",
-                        "queries": queries_data
-                    }
-                else:
-                    return {
-                        "success": True,
-                        "input": input,
-                        "slow_queries_found": 0,
-                        "status": "NO SLOW QUERIES",
-                        "message": "No slow queries found in the database"
-                    }
-            else:
-                # Get average query response time
-                avg_time = db.query(func.avg(SlowQuery.execution_time_ms)).scalar()
-                total_queries = db.query(func.count(SlowQuery.id)).scalar()
-                
+            # Select mock data based on input context
+            if any(keyword in input_lower for keyword in ['slow', 'performance', 'optimize']):
+                # Return a slow query from mock data
+                mock_query = random.choice(MOCK_SLOW_QUERIES)
                 return {
                     "success": True,
                     "input": input,
-                    "total_queries_monitored": total_queries or 0,
-                    "average_response_time_ms": round(avg_time, 2) if avg_time else 0,
+                    "analysis": f"Analyzing query performance for: {input}",
+                    "detected_query": mock_query["query"],
+                    "response_time_ms": mock_query["execution_time_ms"],
+                    "is_slow": True,
+                    "status": "SLOW",
+                    "recommendations": mock_query["recommendations"]
+                }
+            else:
+                # Return normal performance
+                response_time_ms = round(random.uniform(15.0, 150.0), 2)
+                return {
+                    "success": True,
+                    "input": input,
+                    "analysis": f"Query performance check for: {input}",
+                    "response_time_ms": response_time_ms,
+                    "is_slow": False,
                     "status": "NORMAL",
-                    "message": "Query performance metrics retrieved"
+                    "message": "Query execution time is within acceptable range"
                 }
 
         except Exception as e:
             logger.error(f"Query response time check error: {e}")
             return {"success": False, "error": str(e)}
-        finally:
-            db.close()
 
     def check_deadlock(self, input: str) -> dict[str, Any]:
         """
@@ -142,38 +258,25 @@ class DatabaseAgent:
         Returns:
             Deadlock status and information
         """
-        db = self.get_db_session()
         try:
             input_lower = input.lower()
             
             # Q1: Detect active deadlocks with transaction details
-            if any(keyword in input_lower for keyword in ['active', 'detect', 'session', 'transaction', 'current']):
-                # Get active (unresolved) deadlocks
-                active_deadlocks = db.query(DeadlockSession).filter(
-                    DeadlockSession.resolved == False
-                ).order_by(desc(DeadlockSession.detected_at)).all()
+            if any(keyword in input_lower for keyword in ['active', 'detect', 'session', 'transaction']):
+                has_deadlock = random.choice([True, False])
                 
-                if active_deadlocks:
-                    deadlock_data = []
-                    for dl in active_deadlocks:
-                        deadlock_data.append({
-                            "id": dl.id,
-                            "session_id": dl.session_id,
-                            "transaction_id": dl.transaction_id,
-                            "query": dl.query,
-                            "locked_resource": dl.locked_resource,
-                            "wait_time_ms": dl.wait_time_ms,
-                            "blocking_session": dl.blocking_session,
-                            "detected_at": dl.detected_at.strftime("%Y-%m-%d %H:%M:%S")
-                        })
+                if has_deadlock:
+                    # Return 2-3 deadlocked transactions
+                    num_deadlocks = random.randint(2, 3)
+                    deadlock_details = random.sample(MOCK_DEADLOCK_DETAILS, num_deadlocks)
                     
                     return {
                         "success": True,
                         "input": input,
                         "deadlocks_detected": True,
                         "status": "ACTIVE DEADLOCK DETECTED",
-                        "deadlock_count": len(deadlock_data),
-                        "transactions": deadlock_data,
+                        "deadlock_count": num_deadlocks,
+                        "transactions": deadlock_details,
                         "recommendation": "Immediate action required - review transactions and consider killing blocking session"
                     }
                 else:
@@ -187,193 +290,150 @@ class DatabaseAgent:
             
             # Q2: Check deadlock logs for latest occurrence
             elif any(keyword in input_lower for keyword in ['log', 'history', 'latest', 'event', 'occurrence']):
-                # Get latest deadlock from logs
-                latest_deadlock = db.query(DeadlockLog).order_by(desc(DeadlockLog.timestamp)).first()
-                
-                if latest_deadlock:
-                    return {
-                        "success": True,
-                        "input": input,
-                        "deadlocks_detected": True,
-                        "status": "DEADLOCK LOG FOUND",
-                        "latest_event": {
-                            "deadlock_id": latest_deadlock.deadlock_id,
-                            "timestamp": latest_deadlock.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
-                            "affected_queries": json.loads(latest_deadlock.affected_queries) if latest_deadlock.affected_queries else [],
-                            "victim_session": latest_deadlock.victim_session,
-                            "resolution": latest_deadlock.resolution
-                        },
-                        "recommendation": "Review deadlock pattern to implement preventive measures"
-                    }
-                else:
-                    return {
-                        "success": True,
-                        "input": input,
-                        "deadlocks_detected": False,
-                        "status": "NO DEADLOCK LOGS",
-                        "message": "No historical deadlock logs found"
-                    }
-            
-            # Default: Get summary
-            else:
-                active_count = db.query(func.count(DeadlockSession.id)).filter(
-                    DeadlockSession.resolved == False
-                ).scalar()
-                total_logs = db.query(func.count(DeadlockLog.id)).scalar()
+                latest_deadlock = MOCK_DEADLOCK_LOGS[0]  # Most recent
                 
                 return {
                     "success": True,
                     "input": input,
-                    "active_deadlocks": active_count or 0,
-                    "total_historical_deadlocks": total_logs or 0,
-                    "status": "SUMMARY",
-                    "message": "Deadlock monitoring summary"
+                    "deadlocks_detected": True,
+                    "status": "DEADLOCK LOG FOUND",
+                    "latest_event": {
+                        "timestamp": latest_deadlock["timestamp"],
+                        "deadlock_id": latest_deadlock["deadlock_id"],
+                        "affected_queries": latest_deadlock["affected_queries"],
+                        "victim_session": latest_deadlock["victim_session"],
+                        "resolution": latest_deadlock["resolution"]
+                    },
+                    "total_events_in_log": len(MOCK_DEADLOCK_LOGS),
+                    "message": f"Latest deadlock occurred at {latest_deadlock['timestamp']}"
+                }
+            
+            # Default: Generic deadlock check
+            else:
+                has_deadlock = random.choice([True, False])
+                return {
+                    "success": True,
+                    "input": input,
+                    "deadlocks_detected": has_deadlock,
+                    "status": "DEADLOCK DETECTED" if has_deadlock else "NO DEADLOCK",
+                    "message": "Use 'active' keyword for transaction details or 'log' for historical events"
                 }
 
         except Exception as e:
             logger.error(f"Deadlock check error: {e}")
             return {"success": False, "error": str(e)}
-        finally:
-            db.close()
 
     def check_file_size(self, input: str) -> dict[str, Any]:
         """
-        Check database file size and warn if exceeds 90% threshold.
+        Check database file size and usage.
         
         Args:
             input: user input (for context)
         
         Returns:
-            File size and usage percentage
+            File size information and warnings
         """
-        db = self.get_db_session()
         try:
-            # Get all database files
-            db_files = db.query(DatabaseFile).order_by(desc(DatabaseFile.last_checked)).all()
+            input_lower = input.lower()
             
-            if not db_files:
-                return {
-                    "success": True,
-                    "input": input,
-                    "status": "NO DATA",
-                    "message": "No database file size data available"
-                }
+            # Select relevant database based on input
+            if 'prod' in input_lower:
+                db_data = MOCK_FILE_SIZE_DATA[0]
+            elif 'staging' in input_lower or 'stage' in input_lower:
+                db_data = MOCK_FILE_SIZE_DATA[1]
+            elif 'dev' in input_lower:
+                db_data = MOCK_FILE_SIZE_DATA[2]
+            else:
+                db_data = random.choice(MOCK_FILE_SIZE_DATA)
             
-            files_data = []
-            warnings = []
-            
-            for dbf in db_files:
-                usage_percent = (dbf.size_mb / dbf.max_size_mb) * 100
-                
-                file_info = {
-                    "database": dbf.database_name,
-                    "size_mb": dbf.size_mb,
-                    "max_size_mb": dbf.max_size_mb,
-                    "usage_percent": round(usage_percent, 2),
-                    "growth_rate_mb_per_day": dbf.growth_rate_mb_per_day,
-                    "estimated_full_days": dbf.estimated_full_days,
-                    "last_checked": dbf.last_checked.strftime("%Y-%m-%d %H:%M:%S")
-                }
-                
-                if usage_percent >= 90:
-                    file_info["warning"] = "CRITICAL - Database exceeds 90% capacity"
-                    warnings.append(dbf.database_name)
-                elif usage_percent >= 75:
-                    file_info["warning"] = "WARNING - Database exceeds 75% capacity"
-                
-                files_data.append(file_info)
+            # Calculate usage percentage with some variance
+            max_size_mb = 2048  # 2GB limit
+            usage_percent = round((db_data["size_mb"] / max_size_mb) * 100, 2)
+            status = "CRITICAL" if usage_percent >= 90.0 else "WARNING" if usage_percent >= 75.0 else "NORMAL"
             
             return {
                 "success": True,
                 "input": input,
-                "total_databases": len(files_data),
-                "databases_over_90_percent": len(warnings),
-                "status": "CRITICAL" if warnings else "NORMAL",
-                "databases": files_data,
-                "critical_databases": warnings if warnings else None,
-                "recommendation": "Immediate action required - expand storage or archive old data" if warnings else "Database file sizes are within acceptable limits"
+                "database": db_data["database"],
+                "current_size_mb": db_data["size_mb"],
+                "max_size_mb": max_size_mb,
+                "usage_percent": usage_percent,
+                "growth_rate_mb_per_day": db_data["growth_rate_mb_per_day"],
+                "estimated_days_until_full": db_data["estimated_full_days"],
+                "status": status,
+                "recommendations": [
+                    "Archive old data to reduce database size" if usage_percent > 70 else "Monitor growth trends",
+                    "Consider increasing storage allocation" if db_data["estimated_full_days"] < 60 else "Storage growth is manageable",
+                    "Implement data retention policies" if usage_percent > 80 else "Current retention policy is adequate"
+                ]
             }
 
         except Exception as e:
             logger.error(f"File size check error: {e}")
             return {"success": False, "error": str(e)}
-        finally:
-            db.close()
 
     def check_abnormal_data(self, input: str) -> dict[str, Any]:
         """
-        Check interface data for abnormalities.
+        Check for abnormal data based on input.
         
         Args:
             input: user input to get data to check
         
         Returns:
-            Abnormal data count and status
+            Abnormal data detection results
         """
-        db = self.get_db_session()
         try:
             input_lower = input.lower()
             
-            # Check for specific table or all tables
-            if 'orders' in input_lower or 'order' in input_lower:
-                abnormal_records = db.query(AbnormalData).filter(
-                    AbnormalData.table_name == 'orders',
-                    AbnormalData.resolved == False
-                ).all()
-            elif 'products' in input_lower or 'product' in input_lower or 'inventory' in input_lower:
-                abnormal_records = db.query(AbnormalData).filter(
-                    AbnormalData.table_name.in_(['products', 'inventory']),
-                    AbnormalData.resolved == False
-                ).all()
-            else:
-                # Get all unresolved abnormal data
-                abnormal_records = db.query(AbnormalData).filter(
-                    AbnormalData.resolved == False
-                ).order_by(desc(AbnormalData.detected_at)).limit(20).all()
+            # Check if input mentions specific table or anomaly type
+            has_anomaly = random.choice([True, False])
             
-            if abnormal_records:
-                anomalies = []
-                severity_count = {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
+            if has_anomaly:
+                # Select 1-2 anomaly patterns
+                num_anomalies = random.randint(1, 2)
+                anomalies = random.sample(MOCK_ABNORMAL_DATA_PATTERNS, num_anomalies)
                 
-                for record in abnormal_records:
-                    anomaly_info = {
-                        "id": record.id,
-                        "table": record.table_name,
-                        "anomaly_type": record.anomaly_type,
-                        "severity": record.severity,
-                        "detected_at": record.detected_at.strftime("%Y-%m-%d %H:%M:%S"),
-                        "description": record.description,
-                        "affected_rows": json.loads(record.affected_row_ids) if record.affected_row_ids else []
-                    }
-                    anomalies.append(anomaly_info)
-                    
-                    if record.severity in severity_count:
-                        severity_count[record.severity] += 1
+                total_affected = sum(len(a["affected_rows"]) for a in anomalies)
                 
                 return {
                     "success": True,
                     "input": input,
                     "has_abnormal_data": True,
                     "status": "ABNORMAL DATA DETECTED",
-                    "total_anomalies": len(anomalies),
-                    "severity_breakdown": severity_count,
-                    "anomalies": anomalies,
-                    "recommendation": "Review and correct abnormal data records immediately" if severity_count["HIGH"] > 0 else "Monitor and investigate data quality issues"
+                    "anomaly_count": num_anomalies,
+                    "total_affected_rows": total_affected,
+                    "anomalies": [
+                        {
+                            "table": a["table"],
+                            "anomaly_type": a["anomaly"],
+                            "severity": a["severity"],
+                            "affected_count": len(a["affected_rows"]),
+                            "sample_records": a["affected_rows"][:2]  # Show first 2 samples
+                        }
+                        for a in anomalies
+                    ],
+                    "recommendations": [
+                        "Review data validation rules",
+                        "Investigate data entry processes",
+                        "Consider implementing constraints to prevent invalid data"
+                    ]
                 }
             else:
+                # No anomalies detected
+                total_rows = random.randint(100, 1000)
                 return {
                     "success": True,
                     "input": input,
                     "has_abnormal_data": False,
                     "status": "NORMAL",
-                    "message": "No abnormal data patterns detected"
+                    "total_rows_scanned": total_rows,
+                    "abnormal_count": 0,
+                    "message": "All data appears normal - no anomalies detected"
                 }
 
         except Exception as e:
             logger.error(f"Abnormal data check error: {e}")
             return {"success": False, "error": str(e)}
-        finally:
-            db.close()
 
     def check_batch_data(self, input: str) -> dict[str, Any]:
         """
@@ -383,78 +443,57 @@ class DatabaseAgent:
             input: user input to get batch data
         
         Returns:
-            Batch data abnormality count and status
+            Batch data check results
         """
-        db = self.get_db_session()
         try:
-            # Get recent batch processing records
-            batch_records = db.query(BatchProcessing).order_by(
-                desc(BatchProcessing.timestamp)
-            ).limit(10).all()
+            input_lower = input.lower()
             
-            if not batch_records:
+            # Determine if there are batch issues
+            has_issues = random.choice([True, False])
+            
+            if has_issues:
+                # Select 1-2 batch issues from mock data
+                num_batches = random.randint(1, 2)
+                batch_issues = random.sample(MOCK_BATCH_DATA_ISSUES, num_batches)
+                
+                total_processed = sum(b["records_processed"] for b in batch_issues)
+                total_failed = sum(b["failed_records"] for b in batch_issues)
+                failure_rate = round((total_failed / total_processed) * 100, 2)
+                
+                return {
+                    "success": True,
+                    "input": input,
+                    "has_abnormal_data": True,
+                    "status": "BATCH ISSUES DETECTED",
+                    "total_batches_analyzed": num_batches,
+                    "total_records_processed": total_processed,
+                    "total_failed_records": total_failed,
+                    "failure_rate_percent": failure_rate,
+                    "batch_details": batch_issues,
+                    "recommendations": [
+                        "Review batch processing logs for detailed error messages",
+                        "Implement retry mechanism for transient failures",
+                        "Validate data before batch processing",
+                        "Consider increasing batch timeout settings" if any("timeout" in b.get("failure_reasons", {}) for b in batch_issues) else "Monitor data quality at source"
+                    ]
+                }
+            else:
+                # No batch issues
+                total_records = random.randint(5000, 50000)
                 return {
                     "success": True,
                     "input": input,
                     "has_abnormal_data": False,
-                    "status": "NO DATA",
-                    "message": "No batch processing records found"
+                    "status": "NORMAL",
+                    "total_records_processed": total_records,
+                    "failed_records": 0,
+                    "failure_rate_percent": 0.0,
+                    "message": "All batch operations completed successfully"
                 }
-            
-            total_processed = 0
-            total_failed = 0
-            batch_details = []
-            failed_batches = []
-            
-            for batch in batch_records:
-                total_processed += batch.records_processed
-                total_failed += batch.failed_records
-                
-                failure_reasons = json.loads(batch.failure_reasons) if batch.failure_reasons else {}
-                
-                batch_info = {
-                    "batch_id": batch.batch_id,
-                    "records_processed": batch.records_processed,
-                    "failed_records": batch.failed_records,
-                    "failure_rate_percent": round((batch.failed_records / batch.records_processed) * 100, 2) if batch.records_processed > 0 else 0,
-                    "failure_reasons": failure_reasons,
-                    "timestamp": batch.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
-                    "status": batch.status
-                }
-                
-                batch_details.append(batch_info)
-                
-                if batch.failed_records > 0:
-                    failed_batches.append(batch.batch_id)
-            
-            overall_failure_rate = round((total_failed / total_processed) * 100, 2) if total_processed > 0 else 0
-            
-            has_issues = overall_failure_rate > 1.0  # More than 1% failure rate
-            
-            return {
-                "success": True,
-                "input": input,
-                "has_abnormal_data": has_issues,
-                "status": "BATCH ISSUES DETECTED" if has_issues else "NORMAL",
-                "total_batches_analyzed": len(batch_details),
-                "total_records_processed": total_processed,
-                "total_failed_records": total_failed,
-                "failure_rate_percent": overall_failure_rate,
-                "batch_details": batch_details,
-                "failed_batches": failed_batches if failed_batches else None,
-                "recommendations": [
-                    "Review batch processing logs for detailed error messages",
-                    "Implement retry mechanism for transient failures",
-                    "Validate data before batch processing",
-                    "Monitor data quality at source"
-                ] if has_issues else ["Batch processing operating normally"]
-            }
 
         except Exception as e:
             logger.error(f"Batch data check error: {e}")
             return {"success": False, "error": str(e)}
-        finally:
-            db.close()
 
 
 # Initialize database agent
