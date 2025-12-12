@@ -53,7 +53,11 @@ class DatabaseConnection:
                 database=self.database,
                 user=self.user,
                 password=self.password,
-                connect_timeout=5
+                connect_timeout=5,
+                keepalives=1,
+                keepalives_idle=30,
+                keepalives_interval=10,
+                keepalives_count=5
             )
             logger.info("Database connection established")
         except Exception as e:
@@ -67,11 +71,27 @@ class DatabaseConnection:
             self._connection = None
             logger.info("Database connection closed")
 
+    def _ensure_connection(self) -> None:
+        """Ensure database connection is active, reconnect if needed."""
+        if self._connection is None:
+            logger.info("No connection found, connecting...")
+            self.connect()
+            return
+
+        # Check if connection is still alive
+        try:
+            # Try to execute a simple query to test connection
+            with self._connection.cursor() as cur:
+                cur.execute("SELECT 1")
+        except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
+            logger.warning(f"Connection lost: {e}. Reconnecting...")
+            self._connection = None
+            self.connect()
+
     @contextmanager
     def cursor(self, dict_cursor: bool = True):
         """Context manager for database cursor."""
-        if not self._connection:
-            self.connect()
+        self._ensure_connection()
 
         cursor_factory = RealDictCursor if dict_cursor else None
         cur = self._connection.cursor(cursor_factory=cursor_factory)

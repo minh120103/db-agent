@@ -76,13 +76,17 @@ INSERT INTO inventory (product_name, current_stock, max_threshold, category) VAL
     ('Defective Item A', 999999, 10000, 'electronics'),
     ('Defective Item B', 888888, 5000, 'electronics');
 
-BEGIN;
-    ALTER TABLE orders DISABLE TRIGGER ALL;
-    INSERT INTO orders (customer_id, product_id, quantity, total_amount, status) VALUES
-        (1, 1, 1, -150.00, 'error'),
-        (2, 2, 1, -75.50, 'error');
-    ALTER TABLE orders ENABLE TRIGGER ALL;
-COMMIT;
+-- Note: Inserting abnormal data for testing error handling
+-- Temporarily drop the check constraint to allow negative amounts
+ALTER TABLE orders DROP CONSTRAINT IF EXISTS check_positive_amount;
+
+INSERT INTO orders (customer_id, product_id, quantity, total_amount, status) VALUES
+    (1, 1, 1, -150.00, 'error'),
+    (2, 2, 1, -75.50, 'error');
+
+-- Re-add the constraint as NOT VALID (won't check existing data)
+ALTER TABLE orders ADD CONSTRAINT check_positive_amount
+    CHECK (total_amount >= 0) NOT VALID;
 
 -- ============================================================================
 -- BATCH JOBS
