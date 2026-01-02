@@ -1,18 +1,17 @@
-# Makefile for DB Agent MCP Server
+# Makefile for Git Agent MCP Server
 
-.PHONY: help install dev-install install-postgresql install-mysql install-mongodb install-full format lint test dev dev-db-agent dev-chunker mcp-info serve-http test-http clean
+.PHONY: help install dev-install install-postgresql install-mysql install-mongodb install-full format lint test dev dev-git-agent dev-chunker mcp-info serve-http test-http clean
 
 PYTHON ?= python3
 HTTP_PORT ?= 9002
 HTTP_HOST ?= localhost
 
 help: ## Show help
-	@echo "DB Agent MCP Server - Database operations with multiple engines"
+	@echo "Git Agent MCP Server - Git repository monitoring and management"
 	@echo ""
 	@echo "Quick Start:"
-	@echo "  make install-full     Install with all database engines (recommended)"
-	@echo "  make dev-db-agent     Run Database Agent server"
-	@echo "  make dev-chunker      Run Chunker server"
+	@echo "  make install          Install git-agent-mcp"
+	@echo "  make dev-git-agent    Run Git Agent server"
 	@echo ""
 	@echo "Available Commands:"
 	@awk 'BEGIN {FS=":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -44,25 +43,25 @@ lint: ## Lint (ruff, mypy)
 test: ## Run tests
 	pytest -v --cov=chunker_server --cov-report=term-missing
 
-dev: dev-db-agent ## Run Database Agent server (default)
+dev: dev-git-agent ## Run Git Agent server (default)
 
-dev-db-agent: ## Run Database Agent MCP server (stdio)
-	@echo "Starting Database Agent MCP server..."
-	$(PYTHON) -m db_agent.server
+dev-git-agent: ## Run Git Agent MCP server (stdio)
+	@echo "Starting Git Agent MCP server..."
+	$(PYTHON) -m git_agent.server
 
 dev-chunker: ## Run Chunker MCP server (stdio)
 	@echo "Starting Chunker FastMCP server..."
 	$(PYTHON) -m chunker_server.server_fastmcp
 
-dev-db-http: ## Run Database Agent in HTTP mode
-	@echo "Starting Database Agent on http://$(HTTP_HOST):$(HTTP_PORT)"
-	$(PYTHON) -m db_agent.server --transport http --host $(HTTP_HOST) --port $(HTTP_PORT)
+dev-git-http: ## Run Git Agent in HTTP mode
+	@echo "Starting Git Agent on http://$(HTTP_HOST):$(HTTP_PORT)"
+	$(PYTHON) -m git_agent.server --transport http --host $(HTTP_HOST) --port $(HTTP_PORT)
 
 mcp-info: ## Show MCP client config
 	@echo "==================== MCP CLIENT CONFIGURATION ===================="
 	@echo ""
-	@echo "Database Agent Server:"
-	@echo '{"command": "python", "args": ["-m", "chunker_server.server_fastmcp"], "cwd": "'$(PWD)'"}'
+	@echo "Git Agent Server:"
+	@echo '{"command": "python", "args": ["-m", "git_agent.server"], "cwd": "'$(PWD)'"}'
 	@echo ""
 	@echo "=================================================================="
 
@@ -70,13 +69,13 @@ serve-http: ## Run with native FastMCP HTTP
 	@echo "Starting FastMCP server with native HTTP support..."
 	@echo "HTTP endpoint: http://$(HTTP_HOST):$(HTTP_PORT)/mcp/"
 	@echo "API docs: http://$(HTTP_HOST):$(HTTP_PORT)/docs"
-	$(PYTHON) -m chunker_server.server_fastmcp --transport http --host $(HTTP_HOST) --port $(HTTP_PORT)
+	$(PYTHON) -m git_agent.server --transport http --host $(HTTP_HOST) --port $(HTTP_PORT)
 
 serve-sse: ## Run with mcpgateway.translate (SSE bridge)
 	@echo "Starting with translate SSE bridge..."
 	@echo "SSE endpoint: http://$(HTTP_HOST):$(HTTP_PORT)/sse"
 	@echo "HTTP endpoint: http://$(HTTP_HOST):$(HTTP_PORT)/"
-	$(PYTHON) -m mcpgateway.translate --stdio "$(PYTHON) -m chunker_server.server_fastmcp" --host $(HTTP_HOST) --port $(HTTP_PORT) --expose-sse
+	$(PYTHON) -m mcpgateway.translate --stdio "$(PYTHON) -m git_agent.server" --host $(HTTP_HOST) --port $(HTTP_PORT) --expose-sse
 
 test-http: ## Basic HTTP checks
 	curl -s http://$(HTTP_HOST):$(HTTP_PORT)/ | head -20 || true
